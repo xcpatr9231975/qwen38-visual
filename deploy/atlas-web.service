@@ -4,7 +4,7 @@ Description=Qwen3.8 atlas web UI (http://127.0.0.1:8000/web/)
 [Service]
 Type=simple
 WorkingDirectory=%h/project/qwen38-visual
-ExecStart=/home/cpatriaw/miniconda3/bin/python3 -u -m http.server 8000 --bind 127.0.0.1
+ExecStart=/home/cpatriaw/miniconda3/bin/python3 -u -m http.server 8000
 Restart=always
 RestartSec=3
 Nice=10
