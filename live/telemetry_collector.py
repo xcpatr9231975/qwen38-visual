@@ -124,16 +124,17 @@ def parse(text: str) -> dict:
     return out
 
 
-def _clients(port: int) -> list | None:
+def _clients(port: int):
     """nvtop-style attribution: who holds established sockets to the server."""
     try:
         r = subprocess.run(["ss", "-tnp", "state", "established", "dst", ":" + str(port)],
                            capture_output=True, text=True, timeout=3)
     except (OSError, subprocess.SubprocessError):
-        return None
+        return None, []
     if r.returncode != 0:
-        return None
+        return None, []
     agg: dict[str, dict] = {}
+    pm = []
     for line in r.stdout.split("\n")[1:]:
         if "users:" not in line:
             continue
@@ -145,10 +146,52 @@ def _clients(port: int) -> list | None:
             proc = line.split('(("', 1)[1].split('"', 1)[0]
         except IndexError:
             proc = "?"
+        try:
+            pm.append((int(cols[2].rsplit(":", 1)[1]), proc, peer))
+        except (IndexError, ValueError):
+            pass
         k = proc + "@" + peer
         e = agg.setdefault(k, {"proc": proc, "addr": peer, "n": 0})
         e["n"] += 1
-    return sorted(agg.values(), key=lambda e: -e["n"]) or None
+    return (sorted(agg.values(), key=lambda e: -e["n"]) or None), pm
+
+_REQ_TAIL = re.compile(r"\"(\w+) (\S+) HTTP/[\d.]+\" (\d{3})")
+_PEER = re.compile(r"(\[[0-9a-fA-F:.]+\]|[\w.\-]+):(\d+)")
+_TS = re.compile(r"\[([^\]]*)\]")
+
+
+def _parse_req(line):
+    g = _REQ_TAIL.search(line)
+    if not g:
+        return None
+    p = _PEER.search(line)
+    if not p:
+        return None
+    t = _TS.search(line)
+    return p.group(1), int(p.group(2)), (t.group(1) if t else ""), g.group(1), g.group(2), g.group(3)
+
+
+def _container_id(port: int) -> str | None:
+    """Discover the container publishing the inference port, via cgroup hints."""
+    try:
+        r = subprocess.run(["ss", "-tlnpe"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in r.stdout.split("\n"):
+        if ":" + str(port) in line and "docker-" in line:
+            m = re.search(r"docker-([0-9a-f]{16,64})", line)
+            if m:
+                return m.group(1)[:24]
+    return None
+
+
+def _docker_reqs(cid: str) -> str:
+    try:
+        r = subprocess.run(["docker", "logs", "--since", "4s", cid],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
 
 
 class Collector:
@@ -166,6 +209,12 @@ class Collector:
         self.sock_last = 0
         self.nethist = deque(maxlen=40)
         self.port = urlparse(url).port or 80
+        self.cid = _container_id(self.port)
+        self.chist: dict[str, dict] = {}
+        self.pmap = deque(maxlen=800)
+        self.rq_ring = deque(maxlen=8)
+        self.seen: dict = {}
+        self.rq_prev = None
 
     def tick(self) -> dict | None:
         try:
@@ -236,12 +285,62 @@ class Collector:
                     "avg_out": None if nreq <= 0 else int((m.get("generation_tokens_total", 0.0) - b[3]) / nreq)}
         self.tickn += 1
         if self.tickn % 4 == 0:
-            cs = _clients(self.port)
+            cs, pm = _clients(self.port)
             if cs is not None:
                 self.clients_last = cs
                 self.sock_last = sum(c["n"] for c in cs)
+                live = set()
+                for e in cs:
+                    k = e["proc"] + "@" + e["addr"]
+                    live.add(k)
+                    h = self.chist.get(k) or {"proc": e["proc"], "addr": e["addr"], "n": 0, "last": now}
+                    h["n"] = e["n"]
+                    h["last"] = now
+                    self.chist[k] = h
+                for k in list(self.chist):
+                    if k not in live:
+                        self.chist[k]["n"] = 0
+                    if now - self.chist[k]["last"] > 180.0:
+                        del self.chist[k]
+            for e in pm:
+                self.pmap.append((now, e[0], e[1], e[2]))
+            while len(self.pmap) > 800:
+                self.pmap.popleft()
+        if self.cid and self.tickn % 4 == 2:
+            dsucc = dp = dg = 0.0
+            if self.rq_prev is not None:
+                dsucc = max(0.0, m.get("request_success_total", 0.0) - self.rq_prev[0])
+                dp = max(0.0, m.get("prompt_tokens_total", 0.0) - self.rq_prev[1])
+                dg = max(0.0, m.get("generation_tokens_total", 0.0) - self.rq_prev[2])
+            self.rq_prev = (m.get("request_success_total", 0.0), m.get("prompt_tokens_total", 0.0),
+                            m.get("generation_tokens_total", 0.0))
+            per_i = None if dsucc <= 0 else dp / dsucc
+            per_o = None if dsucc <= 0 else dg / dsucc
+            approx = dsucc > 1.5
+            for line in _docker_reqs(self.cid).split("\n"):
+                rp = _parse_req(line)
+                if not rp or rp[3].upper() != "POST" or "completions" not in rp[4]:
+                    continue
+                key = (rp[0], rp[1], rp[4], rp[5])
+                if key in self.seen:
+                    continue
+                self.seen[key] = True
+                if len(self.seen) > 500:
+                    self.seen.clear()
+                port_i = rp[1]
+                proc = next((e[2] for e in reversed(self.pmap)
+                            if e[1] == port_i and now - e[0] < 300.0), "?")
+                path = "chat" if "chat" in rp[4] else "cmp"
+                hhmm = ((rp[2] or "").split(" ")[-1] or
+                       time.strftime("%H:%M:%S", time.localtime(now)))[:8]
+                ti = "~" if per_i is None else (("~" if approx else "") + str(int(per_i)))
+                to = "~" if per_o is None else (("~" if approx else "") + str(int(per_o)))
+                self.rq_ring.append({"hhmm": hhmm, "proc": proc, "path": path,
+                                     "ti": ti, "to": to, "code": rp[5]})
         s["clients"] = self.clients_last
         s["socks"] = self.sock_last
+        s["callers_active"] = sorted(self.chist.values(), key=lambda e: -e["last"])[:6]
+        s["rq"] = list(self.rq_ring)[-4:]
         self.prev, self.prev_t = m, now
         self.down = 0
         self.samples.append(s)

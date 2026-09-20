@@ -246,9 +246,12 @@ def inference_lines(width=90):
                     f"{wn.get('avg_in') if wn.get('avg_in') is not None else '-'} in / "
                     f"{wn.get('avg_out') if wn.get('avg_out') is not None else '-'} out tok  "
                     f"| peak conc {wn.get('peak', '-')}", 7))
-    cs = last.get("clients") or []
+    cs = last.get("callers_active") or last.get("clients") or []
     if cs:
-        out.append((" callers " + "  |  ".join(f"{c['proc']} x{c['n']} @{c['addr']}" for c in cs[:4]), 5))
+        out.append((" callers " + "  ".join(("[" + c["proc"] + " x" + str(c["n"]) + "]" if c.get("n") else "(" + c["proc"] + ")")
+                                            for c in cs[:5]), 5))
+    for q in list(last.get("rq") or [])[::-1][:3]:
+        out.append((f"  q {q['hhmm']} {str(q['proc'])[:10]:<10} {q['path']}  {q['ti']} -> {q['to']} tok  [{q['code']}]", 6))
     def ms(v): return "-" if v is None else f"{v}ms"
     mtp = "-" if last.get("mtp_accept") is None else f"{int(last['mtp_accept'] * 100)}%"
     kv = "-" if last.get("kv") is None else f"{int((last.get('kv') or 0.0) * 100)}%"
