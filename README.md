@@ -93,6 +93,9 @@ of hiding it.
   freshness status
 - `nvidia-smi` GPU scrape, `ss` socket/caller probe, `docker logs` request
   join, query-tagger feed — all degrade gracefully if absent
+- 24 h GPU busy/idle rollup at 5-min buckets (persisted `live/gpu_stats.json`),
+  surfaced in the web HUD as a heat strip with used/idle/unmonitored totals —
+  *unmonitored never renders as idle*
 
 **Builder**
 
@@ -146,11 +149,14 @@ live/manifest.json            generated text-monitor manifest (snapshot)
 live/monitor.py               curses/plain terminal monitor
 live/telemetry_collector.py   metrics scraper/publisher → telemetry.json
 live/query_tagger.py          opt-in proxy :8010 → :8009 + snippets
-test/test_manifest.py         11 pytest cases (builder invariants, monitor fmt)
+test/test_manifest.py         pytest: builder invariants, monitor fmt
+test/test_gpu_rollup.py         pytest: 24h rollup bucketing/persistence
+deploy/                         systemd --user units + atlas_up.sh installer
 ```
 
 Runtime artifacts (git-ignored): `live/telemetry.json` (rewritten ~2/s),
-`live/queries.json` (holds prompt snippets — local-only by policy).
+`live/queries.json` (holds prompt snippets — local-only by policy),
+`live/gpu_stats.json` (24 h busy/idle rollup, ~10 KB).
 
 ---
 
@@ -182,6 +188,8 @@ python3 -m http.server 8000 >/dev/null 2>&1 &
 
 # 3. publish live telemetry (exactly ONE of these)
 python3 live/telemetry_collector.py --interval 0.5 &
+#    (preferred: install the supervised, boot-persistent fleet instead —
+#     ./deploy/atlas_up.sh, see §11; it also retires stray manual instances)
 
 # 4. open the atlas  (add #map for the memory-map view)
 xdg-open http://127.0.0.1:8000/web/#atlas
@@ -284,6 +292,7 @@ python3 live/monitor.py [--path live/manifest.json] [--plain] [--fps 8] [--regen
 
 ```
 python3 live/telemetry_collector.py [--url $VLLAMA_URL] [--interval 0.5] [--keep 240] [--once]
+                          [--gpu-busy 5] [--gpu-bucket 300]
 ```
 
 `VLLAMA_URL` default `http://127.0.0.1:8009/metrics`. `--once` prints one
@@ -397,7 +406,7 @@ goes blind on new hardware:
 ## 10. Testing & verification
 
 ```sh
-python3 -m pytest test/ -q          # 11 passed
+python3 -m pytest test/ -q          # 17 passed
 python3 -m py_compile tools/build_manifest.py live/*.py
 ```
 
@@ -425,6 +434,35 @@ chromium-browser --headless --no-sandbox --disable-dev-shm \
 ---
 
 ## 11. Operations runbook
+
+### Boot persistence (the supported way)
+
+A supervised fleet ships in `deploy/` as **systemd `--user` units** plus an
+installer — no root, no container restarts:
+
+```sh
+./deploy/atlas_up.sh            # install + enable + start (retires strays)
+./deploy/atlas_up.sh status     # unit states + endpoint probes
+./deploy/atlas_up.sh down       # stop + disable (files remain)
+```
+
+| unit | role | restart policy |
+|---|---|---|
+| `atlas-web` | http.server :8000 from repo root | `always`, 3 s |
+| `atlas-collector` | telemetry publisher (**the** single writer) | `always`, 3 s |
+| `atlas-tagger` | query tagger :8010→:8009 | `always`, 3 s |
+| `atlas-regen` | builder loop every 30 s (idempotent, so it never dirties git) | `always`, 10 s |
+
+Semantics: units are `WantedBy=default.target`, so they start at **login**;
+true boot start needs `loginctl enable-linger` (needs admin — the installer
+tries and tells you if it couldn't). Crash loops self-heal via
+`Restart=always`; single-writer discipline is structural (one unit = one
+publisher), and `up` also kills stray manual instances before starting.
+Logs: `journalctl --user -u atlas-collector` etc.
+
+The inference **engine container** is external to this repo but the deck is
+useless without it — set once: `docker update --restart=unless-stopped
+<container>` so it rejoins after reboot too.
 
 Detached launch pattern that survives terminal teardown:
 

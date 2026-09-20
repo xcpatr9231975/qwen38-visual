@@ -1,0 +1,14 @@
+[Unit]
+Description=Qwen3.8 atlas query tagger (:8010 -> :8009, opt-in snippets)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/project/qwen38-visual
+Environment=ATLAS_TAG=1 ATLAS_TAG_PORT=8010
+ExecStart=/home/cpatriaw/miniconda3/bin/python3 -u live/query_tagger.py
+Restart=always
+RestartSec=3
+Nice=10
+
+[Install]
+WantedBy=default.target

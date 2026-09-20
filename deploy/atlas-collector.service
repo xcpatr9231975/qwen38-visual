@@ -1,0 +1,15 @@
+[Unit]
+Description=Qwen3.8 atlas telemetry collector (single writer)
+StartLimitIntervalSec=10
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/project/qwen38-visual
+ExecStart=/home/cpatriaw/miniconda3/bin/python3 -u live/telemetry_collector.py --interval 0.5
+Restart=always
+RestartSec=3
+Nice=10
+
+[Install]
+WantedBy=default.target

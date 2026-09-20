@@ -1,0 +1,13 @@
+[Unit]
+Description=Qwen3.8 atlas manifest rebuild loop (idempotent, every 30s)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/project/qwen38-visual
+ExecStart=/bin/bash -c 'while sleep 30; do /home/cpatriaw/miniconda3/bin/python3 -u tools/build_manifest.py >>/tmp/atlas_regen.log 2>&1; done'
+Restart=always
+RestartSec=10
+Nice=15
+
+[Install]
+WantedBy=default.target
