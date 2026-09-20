@@ -821,7 +821,8 @@ function drawGpu24() {
     }
     busyS += Math.min(busy, tot); idleS += Math.max(0, tot - busy);
     const r = busy / tot;
-    const bg = r > 0 ? `rgba(72,190,96,${(0.18 + 0.82 * r).toFixed(2)})` : "#2a2f36";
+    const a = Math.max(r > 0 ? 0.18 + 0.82 * r : 0, Math.min(1, (b[2] || 0) / 100) * 0.55);
+    const bg = a > 0 ? `rgba(72,190,96,${a.toFixed(2)})` : "#2a2f36";
     const t = new Date((cur - i) * bs * 1000).toISOString().slice(11, 16);
     html += `<div title="${t} \u00b7 busy ${(r * 100).toFixed(0)}% \u00b7 peak ${Math.round(b[2])}%" style="flex:1;min-width:1px;height:14px;background:${bg};border-radius:1px"></div>`;
   }
