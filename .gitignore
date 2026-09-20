@@ -3,3 +3,4 @@ __pycache__/
 *.tmp
 live/telemetry.json
 live/queries.json
+live/gpu_stats.json

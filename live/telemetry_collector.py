@@ -40,6 +40,7 @@ ROOT = os.path.dirname(HERE)
 DEFAULT_URL = os.environ.get("VLLAMA_URL", "http://127.0.0.1:8009/metrics")
 OUT = os.path.join(ROOT, "live", "telemetry.json")
 QUERIES = os.path.join(ROOT, "live", "queries.json")
+STATS = os.path.join(ROOT, "live", "gpu_stats.json")
 
 COUNTERS = (
     "prompt_tokens_total", "generation_tokens_total",
@@ -195,8 +196,65 @@ def _docker_reqs(cid: str) -> str:
     return r.stdout if r.returncode == 0 else ""
 
 
+class GpuRollup:
+    """24h gpu busy/idle rollup, buckets persisted; blind != idle."""
+
+    def __init__(self, path: str, period: float, busy: float,
+                 bucket_s: float = 300.0, window_s: float = 86400.0) -> None:
+        self.path, self.period, self.busy = path, period, busy
+        self.bucket_s, self.window_s = bucket_s, window_s
+        self.buckets: dict[int, list] = {}
+        self.cur = -1
+        self.last_flush = 0.0
+        try:
+            with open(path) as f:
+                doc = json.load(f)
+            for k, v in (doc.get("buckets") or {}).items():
+                if isinstance(v, list) and len(v) == 3:
+                    self.buckets[int(k)] = [float(v[0]), float(v[1]), float(v[2])]
+        except (OSError, ValueError):
+            pass
+        self.prune(time.time())
+
+    def prune(self, now: float) -> None:
+        lo = int((now - self.window_s - self.bucket_s) // self.bucket_s)
+        for k in [k for k in self.buckets if k < lo]:
+            del self.buckets[k]
+
+    def add(self, now: float, util, active: bool) -> None:
+        if util is None and not active:
+            return
+        k = int(now // self.bucket_s)
+        b = self.buckets.setdefault(k, [0.0, 0.0, 0.0])
+        b[1] += self.period
+        if (util is not None and util >= self.busy) or active:
+            b[0] += self.period
+            if util is not None:
+                b[2] = max(b[2], util)
+        if k != self.cur or now - self.last_flush > 60.0:
+            self.cur = k
+            self.prune(now)
+            self.flush(now)
+
+    def flush(self, now: float) -> None:
+        self.last_flush = now
+        doc = {"meta": {"updated": round(now, 1), "bucket_s": self.bucket_s,
+                        "window_s": self.window_s, "busy_pct": self.busy},
+               "buckets": {str(k): [round(v[0], 2), round(v[1], 2), round(v[2], 1)]
+                          for k, v in self.buckets.items()}}
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                f.write(json.dumps(doc, separators=(",", ":")))
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+
 class Collector:
-    def __init__(self, url: str, period: float, keep: int) -> None:
+    def __init__(self, url: str, period: float, keep: int,
+                 gpu_busy: float = 5.0, bucket_s: float = 300.0,
+                 stats_path: str | None = None) -> None:
         self.url = url
         self.period = period
         self.samples: deque = deque(maxlen=keep)
@@ -218,6 +276,7 @@ class Collector:
         self.rq_prev = None
         self.qfeed = deque(maxlen=8)
         self.qmt = 0.0
+        self.roll = GpuRollup(stats_path or STATS, period, gpu_busy, bucket_s)
 
     def tick(self) -> dict | None:
         try:
@@ -264,6 +323,11 @@ class Collector:
             s["gpus"] = self.gpus_last
         else:
             self.gpus_last = s["gpus"]
+        gu = None
+        for g in (s.get("gpus") or []):
+            if g.get("util") is not None:
+                gu = g["util"] if gu is None else max(gu, g["util"])
+        self.roll.add(now, gu, phase != "idle" or run > 0)
         self.nethist.append((now, m.get("http_request_size_bytes_sum", 0.0),
                             m.get("http_response_size_bytes_sum", 0.0), m.get("http_requests_total", 0.0)))
         while len(self.nethist) > 2 and now - self.nethist[0][0] > 7.0:
@@ -398,8 +462,10 @@ def main() -> int:
     ap.add_argument("--interval", type=float, default=0.5)
     ap.add_argument("--keep", type=int, default=240)
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--gpu-busy", type=float, default=5.0, help="util %% threshold for busy")
+    ap.add_argument("--gpu-bucket", type=float, default=300.0, help="bucket width seconds")
     a = ap.parse_args()
-    c = Collector(a.url, a.interval, a.keep)
+    c = Collector(a.url, a.interval, a.keep, a.gpu_busy, a.gpu_bucket)
     if a.once:
         c.tick()
         s = c.tick()

@@ -81,6 +81,8 @@
       <div class="trow"><span class="tl">MTP</span><canvas id="tsmtp" width="190" height="26"></canvas><span id="tvmtp" class="tv">-</span></div>
       <div id="tstats" class="hint">awaiting samples</div>
       <div id="gprows"></div>
+      <div id="gpu24"></div>
+      <div id="gpu24sum" class="hint">gpu 24h &#8230;</div>
       <div id="netrow"></div>
       <div id="tago" class="hint">-</div>
     </div>
@@ -791,8 +793,46 @@ if (state.view === "map") setPreset("map");
 requestAnimationFrame(frame);
 setInterval(pollLive, 2000);
 pollLive();
+let _gpuStats = null;
+async function pollGpuStats() {
+  try {
+    const r = await fetch("../live/gpu_stats.json?ts=" + Date.now(), {cache: "no-store"});
+    if (r.ok) _gpuStats = await r.json();
+  } catch (e) { /* keep last */ }
+  drawGpu24();
+}
+function drawGpu24() {
+  const el = $("gpu24"), sum = $("gpu24sum");
+  const d = _gpuStats;
+  if (!d || !d.meta) { sum.textContent = "gpu 24h \u00b7 no stats file yet"; return; }
+  const bs = d.meta.bucket_s || 300, n = Math.max(2, Math.floor((d.meta.window_s || 86400) / bs));
+  const cur = Math.floor(Date.now() / 1000 / bs);
+  const bk = d.buckets || {};
+  let html = "", busyS = 0, idleS = 0, blind = 0;
+  const fmt = (s) => s >= 3600 ? (s / 3600).toFixed(1) + "h" : s >= 60 ? Math.round(s / 60) + "m" : Math.round(s) + "s";
+  for (let i = n - 1; i >= 0; i--) {
+    const k = String(cur - i);
+    const b = bk[k];
+    const tot = b ? b[1] : 0, busy = b ? b[0] : 0;
+    if (!b || tot < 1) {
+      blind += bs;
+      html += `<div title="unmonitored" style="flex:1;min-width:1px;height:14px;background:repeating-linear-gradient(45deg,#14161a 0 3px,#23272e 3px 6px)"></div>`;
+      continue;
+    }
+    busyS += Math.min(busy, tot); idleS += Math.max(0, tot - busy);
+    const r = busy / tot;
+    const bg = r > 0 ? `rgba(72,190,96,${(0.18 + 0.82 * r).toFixed(2)})` : "#2a2f36";
+    const t = new Date((cur - i) * bs * 1000).toISOString().slice(11, 16);
+    html += `<div title="${t} \u00b7 busy ${(r * 100).toFixed(0)}% \u00b7 peak ${Math.round(b[2])}%" style="flex:1;min-width:1px;height:14px;background:${bg};border-radius:1px"></div>`;
+  }
+  el.style.display = "flex"; el.style.gap = "1px"; el.style.height = "14px"; el.style.margin = "3px 0 1px";
+  el.innerHTML = html;
+  sum.textContent = `gpu 24h \u00b7 used ${fmt(busyS)} \u00b7 idle ${fmt(idleS)} \u00b7 unmonitored ${fmt(blind)}`;
+}
 setInterval(pollTelemetry, 1000);
+setInterval(pollGpuStats, 15000);
 pollTelemetry();
+pollGpuStats();
 window.addEventListener("visibilitychange", () => { if (!document.hidden) pollTelemetry(); });
 window.addEventListener("focus", () => pollTelemetry());
 </script>
