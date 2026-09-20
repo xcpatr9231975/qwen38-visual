@@ -727,7 +727,7 @@ async function pollTelemetry() {
             return `<span style="display:inline-block;margin:0 3px 2px 0;padding:0 6px;border:1px solid hsl(${hue},70%,55%);border-radius:9px;color:hsl(${hue},85%,72%);opacity:${live ? "1" : ".45"};font-size:11px">${esc(String(c.proc))} ${live ? "\u00d7" + c.n : "\u2013"}</span>`;
           }).join("")}</div>` : "")
       + ((last && last.rq) || []).slice(-3).map(q =>
-          `<div class="hint">q ${esc(q.hhmm)} &#183; ${esc(String(q.proc))} &#183; ${esc(q.path)} &#183; ${esc(String(q.ti))}\u2192${esc(String(q.to))} tok &#183; ${esc(q.code)}</div>`).join("");
+          `<div class="hint">q ${esc(q.hhmm)} &#183; ${esc(String(q.proc))} &#183; ${q.snip ? `&quot;${esc(String(q.snip).slice(0, 64))}&quot;` : esc(q.path)} &#183; ${esc(String(q.ti))}\u2192${esc(String(q.to))} tok &#183; ${esc(q.code)}</div>`).join("");
     $("tvconc").textContent = last ? `${(last.run || 0) + (last.wait || 0)} \u00b7 peak ${wn.peak ?? "-"} \u00b7 sock ${last.socks ?? "-"}` : "-";
     $("tvmtp").textContent = last ? `${Math.round((last.mtp_accept || 0) * 100)}% acc \u00b7 trail ${Math.round((last.mtp_accept || 0) * 9)} \u00b7 ${last.decode_tps || 0} t/s` : "-";
     $("tvpre").textContent = (last ? last.prefill_tps : 0) + " t/s";

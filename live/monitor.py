@@ -251,7 +251,9 @@ def inference_lines(width=90):
         out.append((" callers " + "  ".join(("[" + c["proc"] + " x" + str(c["n"]) + "]" if c.get("n") else "(" + c["proc"] + ")")
                                             for c in cs[:5]), 5))
     for q in list(last.get("rq") or [])[::-1][:3]:
-        out.append((f"  q {q['hhmm']} {str(q['proc'])[:10]:<10} {q['path']}  {q['ti']} -> {q['to']} tok  [{q['code']}]", 6))
+        sn = q.get("snip")
+        lbl = f' "{sn[:56]}"' if sn else f" {q['path']} "
+        out.append((f"  q {q['hhmm']} {str(q['proc'])[:10]:<10}{lbl}  {q['ti']} -> {q['to']} tok  [{q['code']}]", 6))
     def ms(v): return "-" if v is None else f"{v}ms"
     mtp = "-" if last.get("mtp_accept") is None else f"{int(last['mtp_accept'] * 100)}%"
     kv = "-" if last.get("kv") is None else f"{int((last.get('kv') or 0.0) * 100)}%"

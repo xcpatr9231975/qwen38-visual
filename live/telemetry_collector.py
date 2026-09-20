@@ -39,6 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DEFAULT_URL = os.environ.get("VLLAMA_URL", "http://127.0.0.1:8009/metrics")
 OUT = os.path.join(ROOT, "live", "telemetry.json")
+QUERIES = os.path.join(ROOT, "live", "queries.json")
 
 COUNTERS = (
     "prompt_tokens_total", "generation_tokens_total",
@@ -215,6 +216,8 @@ class Collector:
         self.rq_ring = deque(maxlen=8)
         self.seen: dict = {}
         self.rq_prev = None
+        self.qfeed = deque(maxlen=8)
+        self.qmt = 0.0
 
     def tick(self) -> dict | None:
         try:
@@ -337,6 +340,26 @@ class Collector:
                 to = "~" if per_o is None else (("~" if approx else "") + str(int(per_o)))
                 self.rq_ring.append({"hhmm": hhmm, "proc": proc, "path": path,
                                      "ti": ti, "to": to, "code": rp[5]})
+        try:
+            mt = os.path.getmtime(QUERIES)
+        except OSError:
+            mt = 0.0
+        if mt != self.qmt:
+            self.qmt = mt
+            try:
+                with open(QUERIES) as f:
+                    jd = json.load(f)
+                self.qfeed = deque(jd.get("requests") or [], maxlen=8)
+            except (OSError, ValueError):
+                pass
+        tag = {(q.get("proc"), q.get("path")): q.get("snip") for q in self.qfeed}
+        for q in self.rq_ring:
+            if q.get("snip") is None:
+                sn = tag.get((q.get("proc"), q.get("path")))
+                if sn:
+                    q["snip"] = sn
+        s["qfeed"] = [{"hhmm": q.get("hhmm"), "proc": q.get("proc"), "path": q.get("path"),
+                      "snip": (q.get("snip") or "")[:80] or None} for q in list(self.qfeed)[:4]]
         s["clients"] = self.clients_last
         s["socks"] = self.sock_last
         s["callers_active"] = sorted(self.chist.values(), key=lambda e: -e["last"])[:6]

@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 *.tmp
 live/telemetry.json
+live/queries.json
