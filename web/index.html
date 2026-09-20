@@ -816,7 +816,7 @@ function drawGpu24() {
     const tot = b ? b[1] : 0, busy = b ? b[0] : 0;
     if (!b || tot < 1) {
       blind += bs;
-      html += `<div title="unmonitored" style="flex:1;min-width:1px;height:14px;background:repeating-linear-gradient(45deg,#14161a 0 3px,#23272e 3px 6px)"></div>`;
+      html += `<div title="unmonitored" style="flex:1;min-width:0;height:14px;background:repeating-linear-gradient(45deg,#14161a 0 3px,#23272e 3px 6px)"></div>`;
       continue;
     }
     busyS += Math.min(busy, tot); idleS += Math.max(0, tot - busy);
@@ -824,9 +824,10 @@ function drawGpu24() {
     const a = Math.max(r > 0 ? 0.18 + 0.82 * r : 0, Math.min(1, (b[2] || 0) / 100) * 0.55);
     const bg = a > 0 ? `rgba(72,190,96,${a.toFixed(2)})` : "#2a2f36";
     const t = new Date((cur - i) * bs * 1000).toISOString().slice(11, 16);
-    html += `<div title="${t} \u00b7 busy ${(r * 100).toFixed(0)}% \u00b7 peak ${Math.round(b[2])}%" style="flex:1;min-width:1px;height:14px;background:${bg};border-radius:1px"></div>`;
+    html += `<div title="${t} \u00b7 busy ${(r * 100).toFixed(0)}% \u00b7 peak ${Math.round(b[2])}%" style="flex:1;min-width:0;height:14px;background:${bg};border-radius:1px"></div>`;
   }
-  el.style.display = "flex"; el.style.gap = "1px"; el.style.height = "14px"; el.style.margin = "3px 0 1px";
+  el.style.display = "flex"; el.style.height = "14px"; el.style.margin = "3px 0 1px";
+  el.style.width = "190px";
   el.innerHTML = html;
   sum.textContent = `gpu 24h \u00b7 used ${fmt(busyS)} \u00b7 idle ${fmt(idleS)} \u00b7 unmonitored ${fmt(blind)}`;
 }
