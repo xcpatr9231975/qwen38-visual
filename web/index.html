@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3.8-Flash-Next &middot; weight atlas</title>
+<style>
+  :root { --bg:#0b0d12; --panel:#11141c; --edge:#1f2530; --fg:#cdd6e4; --dim:#6b7688; --acc:#6fd3ff; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+               font:12px/1.45 ui-monospace, "sf mono", menlo, consolas, monospace; }
+  #app { display:flex; height:100%; }
+  #side { width:330px; min-width:330px; background:var(--panel); border-right:1px solid var(--edge);
+          overflow-y:auto; padding:10px 12px; }
+  #side h1 { font-size:13px; margin:2px 0 0; letter-spacing:.4px; color:var(--acc); }
+  #side h2 { font-size:11px; margin:14px 0 4px; color:var(--dim); text-transform:uppercase; letter-spacing:.8px; }
+  #stage { flex:1; position:relative; }
+  canvas { width:100%; height:100%; display:block; }
+  .row { display:flex; justify-content:space-between; gap:8px; }
+  .k { color:var(--dim); } .v { text-align:right; }
+  .cat { display:flex; align-items:center; gap:6px; padding:2px 3px; cursor:pointer; border-radius:3px; }
+  .cat:hover { background:var(--edge); }
+  .cat .sw { width:10px; height:10px; border-radius:2px; flex:none; }
+  .cat .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cat .gib { color:var(--dim); font-size:11px; }
+  .cat.off { opacity:.35; }
+  .bar { height:4px; background:var(--edge); border-radius:2px; margin-top:1px; }
+  .bar i { display:block; height:100%; border-radius:2px; }
+  #tele { position:absolute; top:10px; right:12px; z-index:4; background:#0d1018d9;
+        border:1px solid var(--edge); border-radius:6px; padding:8px 10px; min-width:280px; }
+  .ph { padding:2px 8px; border-radius:3px; background:#2a313f; text-align:center; color:var(--dim); }
+  .ph.prefill { background:#234a63; color:#d8f0ff; }
+  .ph.decode { background:#5a3a14; color:#ffd9a8; }
+  .ph.prefillxdecode { background:#1f4a2c; color:#b8f0c8; }
+  .trow { display:flex; align-items:center; gap:6px; margin-top:5px; }
+  .tl { width:56px; color:var(--dim); } .tv { width:62px; text-align:right; color:var(--acc); }
+  #tip { position:absolute; pointer-events:none; background:#0d1018ee; border:1px solid var(--edge);
+         border-radius:4px; padding:6px 8px; max-width:420px; display:none; z-index:5; }
+  #tip .t { color:var(--acc); word-break:break-all; }
+  #tip .d { color:var(--dim); }
+  #det { border:1px solid var(--edge); border-radius:4px; padding:6px 8px; background:#0d1018; }
+  .btn { background:var(--edge); color:var(--fg); border:1px solid #2a313f; border-radius:3px;
+         padding:2px 8px; font:inherit; cursor:pointer; margin:0 4px 4px 0; }
+  .btn.on { background:#234a63; berder-color:#3d7fa8; color:#d8f0ff; }
+  #live { color:var(--dim); }
+  #live .ok { color:#7be0a2; } #live .stale { color:#e0b37b; }
+  .hint { color:var(--dim); font-size:11px; }
+#live .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#7be0a2; animation:pulse 1.1s ease-in-out infinite alternate; margin-right:4px; }
+#live .dot.stale { background:#e0b37b; animation:none; }
+@keyframes pulse { from { opacity:1 } to { opacity:.15 } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h1>qwen3.8-flash-next &middot; weight atlas</h1>
+    <div class="hint">every cube = real on-disk bytes (safetensors data_offsets)</div>
+    <div class="hint">tower sweep &#183; derived from live token clock + mtp accept</div>
+    <div class="hint">mtp strip &#183; runner = verify step &#183; trail depth = live accept fraction</div>
+    <h2>live</h2>
+    <div id="live" class="hint">starting&#8230;</div>
+    <h2>pack</h2>
+    <div id="packinfo"></div>
+    <h2>totals</h2>
+    <div id="totals"></div>
+    <h2>categories (click to toggle)</h2>
+    <div id="cats"></div>
+    <h2>view</h2>
+    <div id="ctrls"></div>
+    <h2>selection</h2>
+    <div id="det" class="hint">hover a cube / tower segment &mdash; click to pin</div>
+    <div class="hint">drag&nbsp;orbit &middot; wheel&nbsp;zoom &middot; dbl-click&nbsp;reset &middot; keys 1 orbit / 2 map / 3 front</div>
+  </div>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="tele">
+      <div id="tph" class="ph">idle</div>
+      <div class="trow"><span class="tl">PREFILL</span><canvas id="tspre" width="190" height="26"></canvas><span id="tvpre" class="tv">0/s</span></div>
+      <div class="trow"><span class="tl">DECODE</span><canvas id="tsdec" width="190" height="26"></canvas><span id="tvdec" class="tv">0/s</span></div>
+      <div class="trow"><span class="tl">CONC</span><canvas id="tsconc" width="190" height="26"></canvas><span id="tvconc" class="tv">-</span></div>
+      <div class="trow"><span class="tl">MTP</span><canvas id="tsmtp" width="190" height="26"></canvas><span id="tvmtp" class="tv">-</span></div>
+      <div id="tstats" class="hint">awaiting samples</div>
+      <div id="gprows"></div>
+      <div id="netrow"></div>
+      <div id="tago" class="hint">-</div>
+    </div>
+    <div id="tip"></div>
+  </div>
+</div>
+
+<script src="atlas_data.js"></script>
+<script>
+"use strict";
+// ---------------------------------------------------------------- helpers
+const $ = (id) => document.getElementById(id);
+const esc = (x) => String(x).split("&").join("&amp;").split("<").join("&lt;").split(">").join("&gt;").split('"').join("&quot;");
+const fmtG = (b) => (b / 2**30).toFixed(3);
+const fmtN = (n) => n.toLocaleString("en-US");
+
+const COLORS = {
+  ple:    [0.92, 0.42, 0.86], expert: [0.98, 0.62, 0.24], shared: [0.60, 0.88, 0.30],
+  gate:   [0.98, 0.88, 0.30], index:  [0.55, 0.62, 0.98], attn:   [0.36, 0.72, 1.00],
+  mamba:  [0.30, 0.88, 0.82], hyper:  [0.72, 0.52, 1.00], vision: [1.00, 0.45, 0.45],
+  embed:  [0.98, 0.78, 0.55], head:   [0.98, 0.55, 0.72], mtp:    [0.55, 0.95, 0.55],
+  norm:   [0.55, 0.58, 0.64], other:  [0.45, 0.48, 0.55],
+};
+const col = (c) => COLORS[c] || COLORS.other;
+const catLabel = (c) => {
+  const e = ATLAS.totals.by_category[c];
+  return (e && e.label) || c;
+};
+
+// ---------------------------------------------------------------- gl setup
+const cv = $("cv");
+const gl = cv.getContext("webgl2", { antialias:true, alpha:false });
+if (!gl) { $("stage").innerHTML = "<p style='padding:20px'>webgl2 not available in this browser</p>"; }
+
+const VS = `#version 300 es
+layout(location = 0) in vec3 aPos; layout(location = 1) in vec3 aNor;
+layout(location = 2) in vec3 aOff; layout(location = 3) in vec3 aScl; layout(location = 4) in vec3 aCol;
+uniform mat4 uPV;
+out vec3 vLocal; out vec3 vNor; out vec3 vCol;
+void main() {
+  vLocal = aPos; vNor = aNor; vCol = aCol;
+  gl_Position = uPV * vec4(aPos * aScl + aOff, 1.0);
+}
+`;
+const FS = `#version 300 es
+precision highp float;
+in vec3 vLocal; in vec3 vNor; in vec3 vCol;
+uniform vec3 uLight;
+out vec4 oCol;
+void main() {
+  float lam = max(dot(normalize(vNor), normalize(uLight)), 0.0);
+  vec3 base = vCol * (0.34 + 0.78 * lam);
+  vec3 a = abs(vNor);
+  vec2 t = a.x > 0.5 ? abs(vLocal.yz) : (a.y > 0.5 ? abs(vLocal.xz) : abs(vLocal.xy));
+  float edge = max(t.x, t.y);
+  float seam = smoothstep(0.46, 0.5, edge);
+  base = mix(base, base * 0.28 + vec3(0.015, 0.02, 0.03), seam);
+  oCol = vec4(base, 1.0);
+}
+`;
+
+const GVS = `#version 300 es
+layout(location = 0) in vec3 aPos; uniform mat4 uPV; out float vDim;
+void main() { vDim = 0.0; gl_Position = uPV * vec4(aPos, 1.0); }
+`;
+const GFS = `#version 300 es
+precision highp float;
+in float vDim; out vec4 oCol;
+void main() { oCol = vec4(0.13, 0.16, 0.21, 1.0); }
+`;
+
+function prog(vsSrc, fsSrc) {
+  const mk = (t, s) => {
+    const sh = gl.createShader(t);
+    gl.shaderSource(sh, s); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
+      throw new Error("shader: " + gl.getShaderInfoLog(sh));
+    return sh;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error("link: " + gl.getProgramInfoLog(p));
+  return p;
+}
+const boxP = prog(VS, FS), groundP = prog(GVS, GFS);
+
+// unit cube with face normals (36 verts)
+const CUBE = (() => {
+  const f = [
+    [[0,0,1],[1,1,0],[-1,1,0],[-1,-1,0],[1,-1,0]],   // +z
+    [[0,0,-1],[-1,1,0],[1,1,0],[1,-1,0],[-1,-1,0]],  // -z
+    [[1,0,0],[1,1,-1],[1,1,1],[1,-1,1],[1,-1,-1]],   // +x
+    [[-1,0,0],[-1,1,1],[-1,1,-1],[-1,-1,-1],[-1,-1,1]], // -x
+    [[0,1,0],[-1,1,1],[1,1,1],[1,1,-1],[-1,1,-1]],   // +y
+    [[0,-1,0],[-1,-1,-1],[1,-1,-1],[1,-1,1],[-1,-1,1]], // -y
+  ];
+  const v = [];
+  for (const g of f) { const n = g[0];
+    for (const i of [1,2,3,1,3,4]) v.push(g[i][0]*0.5, g[i][1]*0.5, g[i][2]*0.5, n[0], n[1], n[2]);
+  }
+  return new Float32Array(v);
+})();
+
+// geometry buffers
+const cubeVao = gl.createVertexArray();
+{
+  const b = gl.createBuffer();
+  gl.bindVertexArray(cubeVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, CUBE, gl.STATIC_DRAW);
+  const st = 6 * 4;
+  for (const [loc, n, off] of [[0,3,0],[1,3,12]]) {
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, st, off);
+  }
+}
+const instBuf = gl.createBuffer();
+let instCount = 0;
+function bindInstances(data) {          // data: Float32Array, stride 9 floats
+  gl.bindVertexArray(cubeVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+  const st = 9 * 4;
+  for (const [loc, n, off] of [[2,3,0],[3,3,12],[4,3,24]]) {
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, n, gl.FLOAT, false, st, off);
+    gl.vertexAttribDivisor(loc, 1);
+  }
+  instCount = data.length / 9;
+}
+
+// ground grid
+const groundVao = gl.createVertexArray();
+{
+  const lines = [];
+  const R = 60;
+  for (let i = -R; i <= R; i += 2) { lines.push(-R, 0, i, R, 0, i, i, 0, -R, i, 0, R); }
+  const b = gl.createBuffer();
+  gl.bindVertexArray(groundVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+}
+
+// ---------------------------------------------------------------- matrices
+function perspective(fov, asp, near, far) {
+  const f = 1 / Math.tan(fov / 2), nf = 1 / (near - far), o = new Float32Array(16);
+  o[0] = f / asp; o[5] = f; o[10] = (far + near) * nf; o[11] = -1; o[14] = 2 * far * near * nf;
+  return o;
+}
+function lookAt(eye, ctr, up) {
+  const z = nrm([eye[0]-ctr[0], eye[1]-ctr[1], eye[2]-ctr[2]]);
+  const x = nrm(cross(up, z)), y = cross(z, x);
+  const o = new Float32Array(16);
+  o[0]=x[0]; o[1]=y[0]; o[2]=z[0];
+  o[4]=x[1]; o[5]=y[1]; o[6]=z[1];
+  o[8]=x[2]; o[9]=y[2]; o[10]=z[2];
+  o[12]=-dot(x,eye); o[13]=-dot(y,eye); o[14]=-dot(z,eye); o[15]=1;
+  return o;
+}
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0; for (let k = 0; k < 4; k++) s += a[k*4+r] * b[c*4+k];
+    o[c*4+r] = s;
+  }
+  return o;
+}
+const nrm = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
+const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+
+// ---------------------------------------------------------------- camera
+const cam = { yaw: -0.62, pitch: 0.5, dist: 46, tgt: [0, 1.1, -3],
+              home: null };
+cam.home = { ...cam };
+function camEye() {
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  return [cam.tgt[0] + Math.sin(cam.yaw) * cp * cam.dist,
+          cam.tgt[1] + sp * cam.dist,
+          cam.tgt[2] + Math.cos(cam.yaw) * cp * cam.dist];
+}
+function setPreset(p) {
+  if (p === "map")   Object.assign(cam, { yaw: 0.0001, pitch: 1.47, dist: 34, tgt: [0, 0.5, -6] });
+  if (p === "orbit") Object.assign(cam, { yaw: -0.62, pitch: 0.5,  dist: 46, tgt: [0, 1.1, -3] });
+  if (p === "front") Object.assign(cam, { yaw: 0, pitch: 0.16, dist: 44, tgt: [0, 1.6, -2] });
+  if (p === "map") Object.assign(cam, { yaw: -0.0001, pitch: 1.32, dist: 38, tgt: [0, 0, 13] });
+}
+
+// ---------------------------------------------------------------- atlas geometry
+const SCALE_MODES = ["sqrt", "linear", "log"];
+const state = { scale: "sqrt", hidden: new Set(), auto: true, lastAct: 0, view: "atlas" };
+const teleState = { data: null };
+
+// instance list rebuilt when toggles/scale change
+let insts = [];   // {pos, scl, colr, box:[minx,miny,minz,maxx,maxy,maxz], meta}
+function scaleOf(b, bmax) {
+  if (state.scale === "linear") return b / bmax;
+  if (state.scale === "log") return Math.log1p(b) / Math.log1p(bmax);
+  return Math.sqrt(b / bmax);
+}
+
+let baseInsts = [], teleKvInsts = [], _mtpInsts = [];
+function bindMerged() {
+  insts = baseInsts.concat(teleKvInsts, _mtpInsts);
+  const arr = new Float32Array(insts.length * 9);
+  insts.forEach((o, i) => {
+    const b = i * 9;
+    arr[b] = o.pos[0]; arr[b+1] = o.pos[1]; arr[b+2] = o.pos[2];
+    arr[b+3] = o.scl[0]; arr[b+4] = o.scl[1]; arr[b+5] = o.scl[2];
+    arr[b+6] = o.colr[0]; arr[b+7] = o.colr[1]; arr[b+8] = o.colr[2];
+  });
+  bindInstances(arr);
+}
+function bitsFactor(name) {
+  const tail = (x) => x.split(".").slice(-3).map(p => /^[0-9]+$/.test(p) ? "*" : p).join(".");
+  const q = ATLAS.quant_bits_by_family || {};
+  for (const k in q) {
+    if (q[k] && q[k].length && tail(k) === tail(name))
+      return Math.min(1.3, 0.6 + Math.max(...q[k]) / 11);
+  }
+  return 1;
+}
+function composeKv() {
+  teleKvInsts = [];
+  const T = teleState.data;
+  const kv = T ? (T.kv || 0) : 0, run = T ? T.run : 0, phase = T ? T.phase : "idle";
+  const hot = phase.indexOf("prefill") >= 0 ? [0.4,0.86,1.0] : phase === "decode" ? [1.0,0.63,0.24] : [0.42,0.86,0.52];
+  const x0 = -((32 + 8 + 2) * 1.12) / 2, z = state.view === "map" ? -2.4 : 2.6;
+  for (let i = 0; i < 32; i++) {
+    const on = i < Math.round(kv * 32);
+    const h = on ? 0.12 : 0.05;
+    teleKvInsts.push({ pos: [x0 + i * 1.12, h / 2, z], scl: [1.0, h, 0.62], colr: on ? hot : [0.13, 0.15, 0.19],
+      box: [x0 + i * 1.12 - 0.5, 0, z - 0.31, x0 + i * 1.12 + 0.5, h, z + 0.31],
+      meta: { kind: "kv", label: "KV cache  " + Math.round(kv * 100) + "%  (32 blocks = full pool)", bytes: 0 } });
+  }
+  for (let i = 0; i < 8; i++) {
+    const on = i < run;
+    teleKvInsts.push({ pos: [x0 + (33 + i) * 1.12, 0.075, z], scl: [1.0, 0.15, 0.62], colr: on ? [0.85, 0.55, 1.0] : [0.13, 0.15, 0.19],
+      box: [x0 + (33 + i) * 1.12 - 0.5, 0, z - 0.31, x0 + (33 + i) * 1.12 + 0.5, 0.15, z + 0.31],
+      meta: { kind: "kv", label: "request lane " + (i + 1) + (on ? "  active" : ""), bytes: 0 } });
+  }
+  bindMerged();
+}
+function build() {
+  baseInsts = [];
+  _mtpInsts = [];
+  if (state.view === "map") {
+    const per = 0.25 * 2**30, cols = 26;
+    const seq = ATLAS.weights.slice().sort((a, b) =>
+      a.shard < b.shard ? -1 : a.shard > b.shard ? 1 : (a.name < b.name ? -1 : a.shard === b.shard && a.name > b.name ? 1 : 0));
+    let k = 0;
+    for (const g of seq) {
+      if (state.hidden.has(g.cat)) continue;
+      const n = Math.max(1, Math.round(g.bytes / per));
+      for (let i = 0; i < n; i++) {
+        const gx = (k % cols) * 1.12 - (cols * 1.12) / 2 + 0.56;
+        const gz = Math.floor(k / cols) * 1.12;
+        const c = col(g.cat), f = bitsFactor(g.name);
+        baseInsts.push({ pos: [gx, 0.055, gz], scl: [1.02, 0.11, 1.02], colr: [c[0]*f, c[1]*f, c[2]*f],
+          box: [gx - 0.51, 0, gz - 0.51, gx + 0.51, 0.11, gz + 0.51],
+          meta: { kind: "mem", name: g.name, cat: g.cat, dtype: g.dtype, shape: g.shape.join("x"),
+                 count: g.count, bytes: g.bytes, each: g.bytes_each, shard: g.shard } });
+        k++;
+      }
+    }
+    composeKv();
+    return;
+  }
+  const decoders = ATLAS.layers.filter(l => l.i < 48);
+  const maxBytes = Math.max(...decoders.map(l => Math.max(...Object.values(l.by_cat))));
+  const H = 6.5, SP = 1.35;
+
+  // decoder towers (row z = 0) + mtp band row (z = -7)
+  for (const l of ATLAS.layers) {
+    const isMtp = l.i >= 1000;
+    const idx = isMtp ? l.i - 1000 : l.i;
+    const x = (idx - 23.5) * SP;
+    const z = isMtp ? -7 : 0;
+    let y = 0.001;
+    for (const c of Object.keys(l.by_cat)) {
+      if (state.hidden.has(c)) continue;
+      const h = Math.max(0.02, scaleOf(l.by_cat[c], maxBytes) * H);
+      const c3 = col(c);
+      baseInsts.push({ pos:[x, y + h/2, z], scl:[0.9, h, 0.9], colr:c3.slice(0), base:c3.slice(0),
+                   li:idx, mtp:isMtp, attn:isMtp ? 0.8 : (l.type === "full_attention" ? 1 : l.type === "linear_attention" ? 0.5 : 0.7),
+                   box:[x-0.45, y, z-0.45, x+0.45, y+h, z+0.45],
+                   meta:{ kind:"segment", label:catLabel(c), cat:c, bytes:l.by_cat[c],
+                         layer:isMtp ? ("mtp "+idx) : ("layer "+l.i + " &middot; " + (l.type||"?")) } });
+      y += h;
+    }
+    // ground tile: full-attention layers glow blue, linear-attention teal
+    const ft = l.type === "full_attention" ? [0.22,0.42,0.85]
+             : l.type === "linear_attention" ? [0.16,0.5,0.5] : [0.2,0.22,0.26];
+    baseInsts.push({ pos:[x, 0.005, z], scl:[1.22, 0.012, 1.22], colr:ft,
+                 box:[x-.61, 0, z-.61, x+.61, .01, z+.61],
+                 meta:{ kind:"tile", label:(isMtp?"mtp ":"layer ")+idx+" &middot; "+(l.type||""), cat:null, bytes:0 } });
+  }
+
+  // category islands: cube per weight-template, edge ~ cube-root of real bytes
+  const maxEach = Math.max(...ATLAS.weights.map(w => w.bytes_each)) / 2**30;
+  const islands = [...new Set(ATLAS.weights.map(w => w.cat))]
+    .sort((a, b) => (ATLAS.totals.by_category[b]||{bytes:0}).bytes
+                  - (ATLAS.totals.by_category[a]||{bytes:0}).bytes);
+  let iz = -12;
+  for (const c of islands) {
+    if (state.hidden.has(c)) { iz += 6; continue; }
+    const ws = ATLAS.weights.filter(w => w.cat === c).slice(0, 60);
+    const nx = Math.ceil(Math.sqrt(ws.length));
+    let mxE = 0;
+    const es = ws.map(w => Math.max(0.06, Math.pow(w.bytes_each / 2**30 / maxEach, 1/3) * 1.35));
+    for (const e of es) mxE = Math.max(mxE, e);
+    const cell = mxE + 0.22;
+    ws.forEach((w, j) => {
+      const gx = (j % nx) * cell - (nx * cell) / 2 + cell/2 + 0;
+      const gz = iz + Math.floor(j / nx) * cell + cell/2;
+      const e = es[j], c3 = col(c);
+      baseInsts.push({ pos:[gx, e/2 + 0.01, gz], scl:[e, e, e], colr:c3,
+                   box:[gx-e/2, 0, gz-e/2, gx+e/2, e, gz+e/2],
+                   meta:{ kind:"cube", name:w.name, cat:c, bytes:w.bytes, each:w.bytes_each,
+                          count:w.count, dtype:w.dtype, shape:w.shape.join("×"), shard:w.shard } });
+    });
+    iz -= Math.ceil(ws.length / nx) * cell + 3.2;
+  }
+
+  bindMerged();
+}
+
+// ---------------------------------------------------------------- render
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = cv.clientWidth * dpr | 0, h = cv.clientHeight * dpr | 0;
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+}
+let last = "";
+function render() {
+  resize();
+  const pv = mul(perspective(0.92, cv.width / Math.max(1, cv.height), 0.1, 600),
+                 lookAt(camEye(), cam.tgt, [0, 1, 0]));
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.043, 0.05, 0.07, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  gl.useProgram(groundP);
+  gl.uniformMatrix4fv(gl.getUniformLocation(groundP, "uPV"), false, pv);
+  gl.bindVertexArray(groundVao);
+  gl.drawArrays(gl.LINES, 0, 2 * 2 * 61);
+
+  gl.useProgram(boxP);
+  gl.uniformMatrix4fv(gl.getUniformLocation(boxP, "uPV"), false, pv);
+  gl.uniform3fv(gl.getUniformLocation(boxP, "uLight"), nrm([0.5, 0.9, 0.35]));
+  gl.bindVertexArray(cubeVao);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, instCount);
+}
+let _tok = 0, _animT = 0, _animPh = "";
+function animGains() {
+  const T = teleState.data;
+  const ph = (T && T.phase) || "idle";
+  const act = ph === "decode" ? 1 : ph.indexOf("prefill") >= 0 ? 0.75 : 0;
+  const cursor = _tok % 48;
+  const acc = T ? (T.mtp_accept || 0) : 0;
+  for (const o of baseInsts) {
+    if (!o.base) continue;
+    let g = 1;
+    if (o.mtp) { if (act > 0) g = 1 + acc * (0.5 + 0.4 * Math.sin(_tok * 0.79 + o.li * 0.8)); }
+    else if (act > 0) {
+      let d = Math.abs(o.li - cursor); d = Math.min(d, 48 - d);
+      g = 1 + act * o.attn * Math.exp(-(d * d) / 2.4) * 0.95;
+    }
+    o.colr = [Math.min(1.7, o.base[0] * g), Math.min(1.7, o.base[1] * g), Math.min(1.7, o.base[2] * g)];
+  }
+  _mtpInsts = [];
+  {
+    const cells = 24, cur = Math.floor(_tok / 3) % cells, trail = act > 0 ? Math.round(acc * 9) : -1;
+    for (let i = 0; i < cells; i++) {
+      const d = (cur - i + cells) % cells;
+      const on = act > 0 && d <= trail;
+      const x = (i - (cells - 1) / 2) * 1.28;
+      const c = act > 0 && i === cur ? [1.0, 0.82, 0.35] : on ? [0.95 - d * 0.07, 0.42, 0.16] : [0.1, 0.12, 0.16];
+      const h = act > 0 && i === cur ? 0.16 : on ? 0.09 : 0.04;
+      _mtpInsts.push({ pos: [x, h / 2, -6.0], scl: [1.05, h, 0.5], colr: c,
+        box: [x - 0.52, 0, -6.26, x + 0.52, h, -5.74],
+        meta: { kind: "kv", label: i === cur ? "mtp runner  verify step (derived)" : on ? "mtp accept depth " + d + "/" + trail : "mtp strip", bytes: 0 } });
+    }
+  }
+  bindMerged();
+}
+let _last = Date.now();
+function frame() {
+  const nowT = Date.now(); const dt = Math.min(0.1, (nowT - _last) / 1000); _last = nowT;
+  const T = teleState.data;
+  const ph = (T && T.phase) || "idle";
+  const rate = ph === "idle" ? 0 : Math.min(40, (T.decode_tps || 0) + (ph.indexOf("prefill") >= 0 ? (T.prefill_tps || 0) / 256 : 0));
+  _tok += rate * dt;
+  if (state.view === "atlas" && (rate > 0 || ph !== _animPh) && nowT - _animT > 90) { _animT = nowT; _animPh = ph; animGains(); }
+  if (state.auto && state.view === "atlas" && !drag && nowT - state.lastAct > 4000) cam.yaw += 0.08 * dt;
+  render(); requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- picking
+let mvInv = null, proj = null;
+function pick(mx, my) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const x = (mx * dpr) / cv.width * 2 - 1, y = 1 - (my * dpr) / cv.height * 2;
+  if (!proj || !mvInv) return null;
+  // unproject two points on the ray via manual inverse-free trick: use same pv
+  const pv = mul(proj, mvInv);
+  const inv = invert4(pv);
+  if (!inv) return null;
+  const p0 = xf(inv, x, y, -1), p1 = xf(inv, x, y, 1);
+  const d = nrm([p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2]]);
+  let best = null, bt = Infinity;
+  for (const o of insts) {
+    const t = rayAabb(p0, d, o.box);
+    if (t !== null && t < bt) { bt = t; best = o; }
+  }
+  return best;
+}
+function xf(m, x, y, z) {
+  const w = m[3]*x + m[7]*y + m[11]*z + m[15];
+  return [(m[0]*x + m[4]*y + m[8]*z + m[12]) / w,
+          (m[1]*x + m[5]*y + m[9]*z + m[13]) / w,
+          (m[2]*x + m[6]*y + m[10]*z + m[14]) / w];
+}
+function invert4(m) {
+  const o = new Float32Array(16);
+  const a00 = m[0]*m[5]-m[1]*m[4], a01 = m[0]*m[6]-m[2]*m[4], a02 = m[0]*m[7]-m[3]*m[4],
+        a03 = m[1]*m[6]-m[2]*m[5], a04 = m[1]*m[7]-m[3]*m[5], a05 = m[2]*m[7]-m[3]*m[6],
+        a06 = m[8]*m[13]-m[9]*m[12], a07 = m[8]*m[14]-m[10]*m[12], a08 = m[8]*m[15]-m[11]*m[12],
+        a09 = m[9]*m[14]-m[10]*m[13], a10 = m[9]*m[15]-m[11]*m[13], a11 = m[10]*m[15]-m[11]*m[14];
+  let det = a00*a11 - a01*a10 + a02*a09 + a03*a08 - a04*a07 + a05*a06;
+  if (!det) return null; det = 1 / det;
+  o[0]=(m[5]*a11-m[6]*a10+m[7]*a09)*det; o[1]=(m[2]*a10-m[1]*a11-m[3]*a09)*det;
+  o[2]=(m[13]*a05-m[14]*a04+m[15]*a03)*det; o[3]=(m[10]*a04-m[9]*a05-m[11]*a03)*det;
+  o[4]=(m[6]*a08-m[4]*a11-m[7]*a07)*det; o[5]=(m[0]*a11-m[2]*a08+m[3]*a07)*det;
+  o[6]=(m[14]*a02-m[12]*a05-m[15]*a01)*det; o[7]=(m[8]*a05-m[10]*a02+m[11]*a01)*det;
+  o[8]=(m[4]*a10-m[5]*a08+m[7]*a06)*det; o[9]=(m[1]*a08-m[0]*a10-m[3]*a06)*det;
+  o[10]=(m[12]*a04-m[13]*a02+m[15]*a00)*det; o[11]=(m[9]*a02-m[8]*a04-m[11]*a00)*det;
+  o[12]=(m[5]*a07-m[4]*a09-m[6]*a06)*det; o[13]=(m[0]*a09-m[1]*a07+m[2]*a06)*det;
+  o[14]=(m[13]*a01-m[12]*a03-m[14]*a00)*det; o[15]=(m[8]*a03-m[9]*a01+m[10]*a00)*det;
+  return o;
+}
+function rayAabb(o, d, b) {
+  let tmin = 0, tmax = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const od = o[i], dd = d[i], lo = b[i], hi = b[i+3];
+    if (Math.abs(dd) < 1e-9) { if (od < lo || od > hi) return null; continue; }
+    let t1 = (lo - od) / dd, t2 = (hi - od) / dd;
+    if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+    if (tmin > tmax) return null;
+  }
+  return tmin;
+}
+
+// refresh pv/mvInv each render for picking accuracy
+{
+  const _render = render;
+  render = function () {
+    proj = perspective(0.92, cv.width / Math.max(1, cv.height), 0.1, 600);
+    mvInv = lookAt(camEye(), cam.tgt, [0, 1, 0]);
+    _render();
+  };
+}
+
+// ---------------------------------------------------------------- input
+let drag = null, pinned = null;
+cv.addEventListener("pointerdown", (e) => { drag = { x:e.clientX, y:e.clientY, yaw:cam.yaw, pitch:cam.pitch, moved:0 }; state.lastAct = Date.now(); });
+window.addEventListener("pointermove", (e) => {
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.moved = Math.max(drag.moved, Math.abs(dx) + Math.abs(dy));
+    cam.yaw = drag.yaw - dx * 0.005;
+    cam.pitch = Math.min(1.5, Math.max(0.02, drag.pitch + dy * 0.005));
+  }
+  hoverTest(e);
+});
+window.addEventListener("pointerup", (e) => {
+  if (drag && drag.moved < 4) {
+    const o = pickAt(e);
+    pinned = o; showDetail(o);
+  }
+  drag = null;
+});
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  cam.dist = Math.min(220, Math.max(6, cam.dist * Math.exp(e.deltaY * 0.001))); state.lastAct = Date.now();
+}, { passive:false });
+cv.addEventListener("dblclick", () => Object.assign(cam, { ...cam.home }));
+window.addEventListener("keydown", (e) => {
+  if (e.key === "1") setPreset("orbit");
+  if (e.key === "2") setPreset("map");
+  if (e.key === "3") setPreset("front");
+  if (e.key === "4") toggleView();
+});
+const pickAt = (e) => {
+  const r = cv.getBoundingClientRect();
+  return pick(e.clientX - r.left, e.clientY - r.top);
+};
+function hoverTest(e) {
+  const tip = $("tip");
+  if (drag) { tip.style.display = "none"; return; }
+  const r = cv.getBoundingClientRect();
+  const o = pick(e.clientX - r.left, e.clientY - r.top);
+  if (!o) { tip.style.display = "none"; return; }
+  tip.style.display = "block";
+  tip.style.left = Math.min(e.clientX - r.left + 14, cv.clientWidth - 440) + "px";
+  tip.style.top = Math.max(4, e.clientY - r.top - 10) + "px";
+  tip.innerHTML = metaHtml(o.meta, true);
+}
+function toggleView() {
+  state.view = state.view === "map" ? "atlas" : "map";
+  build(); if (state.view === "map") setPreset("map"); else setPreset("orbit");
+}
+function metaHtml(m, short) {
+  if (!m) return "";
+  if (m.kind === "cube") {
+    return `<div class="t">${esc(m.name)}</div>
+      <div class="d">${esc(m.dtype)} &middot; [${esc(m.shape)}] &middot; count ${fmtN(m.count)} &middot; ${esc(m.shard)}</div>
+      <div><b>${fmtG(m.bytes)} GiB</b> total <span class="d">(${fmtG(m.each)} GiB each &times; ${fmtN(m.count)})</span></div>`;
+  }
+  if (m.kind === "mem") {
+    return `<div class="t">${esc(m.name)}</div>
+      <div class="d">${esc(m.dtype)} · [${esc(m.shape)}] · x${fmtN(m.count)} · ${esc(m.shard)}</div>
+      <div><b>${fmtG(m.bytes)} GiB</b> group <span class="d">(${fmtG(m.each)} GiB each)</span></div>`;
+  }
+  if (m.kind === "kv") {
+    return `<div class="t">${esc(m.label)}</div>`;
+  }
+  if (m.kind === "segment") {
+    return `<div class="t">${esc(m.layer)}</div>
+      <div class="d">${m.label}</div><div><b>${fmtG(m.bytes)} GiB</b> real bytes</div>`;
+  }
+  return `<div class="t">${esc(m.label)}</div>`;
+}
+function showDetail(o) {
+  $("det").innerHTML = o ? metaHtml(o.meta) : "hover a cube / tower segment &mdash; click to pin";
+}
+
+// ---------------------------------------------------------------- sidebar
+function sidebar() {
+  const t = ATLAS.totals, a = ATLAS.arch, m = ATLAS.meta;
+  $("packinfo").innerHTML = `
+    <div class="row"><span class="k">model</span><span class="v">${esc(m.model)}</span></div>
+    <div class="row"><span class="k">digest</span><span class="v">${esc(m.digest)}</span></div>
+    <div class="row"><span class="k">layers</span><span class="v">${a.layers} (${(a.layer_types||[]).filter(x=>x==="full_attention").length} full / ${(a.layer_types||[]).filter(x=>x==="linear_attention").length} linear)</span></div>
+    <div class="row"><span class="k">experts</span><span class="v">${a.num_experts}/tok ${a.experts_per_token}</span></div>
+    <div class="row"><span class="k">hidden</span><span class="v">${a.hidden_size}</span></div>`;
+  $("totals").innerHTML = `
+    <div class="row"><span class="k">atlas</span><span class="v"><b>${t.gib_total}</b> GiB</span></div>
+    <div class="row"><span class="k">on disk</span><span class="v">${t.gib_on_disk} GiB</span></div>
+    <div class="row"><span class="k">tensors</span><span class="v">${fmtN(t.tensors)}</span></div>
+    <div class="row"><span class="k">cubes</span><span class="v">${fmtN(t.groups)}</span></div>
+    <div class="row"><span class="k">quant</span><span class="v">${a.quant.method||"?"} ${a.quant.bits||""}b</span></div>`;
+  const maxc = Math.max(...Object.values(t.by_category).map(e => e.bytes));
+  $("cats").innerHTML = Object.entries(t.by_category)
+    .sort((p, q) => q[1].bytes - p[1].bytes)
+    .map(([c, e]) => {
+      const [r, g, b] = col(c);
+      const sw = `rgb(${(r*255)|0},${(g*255)|0},${(b*255)|0})`;
+      const off = state.hidden.has(c) ? " off" : "";
+      return `<div class="cat${off}" data-c="${esc(c)}">
+        <span class="sw" style="background:${sw}"></span>
+        <span class="nm">${esc(e.label)}</span>
+        <span class="gib">${e.gib} GiB</span></div>
+        <div class="bar"><i style="width:${Math.max(1.5, e.bytes/maxc*100)}%;background:${sw}"></i></div>`;
+    }).join("");
+  document.querySelectorAll(".cat").forEach(el => el.addEventListener("click", () => {
+    const c = el.dataset.c;
+    state.hidden.has(c) ? state.hidden.delete(c) : state.hidden.add(c);
+    sidebar(); build();
+  }));
+}
+function controls() {
+  $("ctrls").innerHTML = SCALE_MODES.map(s =>
+    `<button class="btn ${state.scale===s?"on":""}" data-s="${s}">${s}</button>`).join("")
+    + `<button class="btn ${state.auto ? "on" : ""}" data-a="auto">auto-orbit</button> <button class="btn" data-p="orbit">orbit</button>
+       <button class="btn ${state.view === "map" ? "on" : ""}" data-v="map">memory map</button> <button class="btn" data-p="map">map</button>
+       <button class="btn" data-p="front">front</button>`;
+  document.querySelectorAll("[data-s]").forEach(b => b.addEventListener("click", () => {
+    state.scale = b.dataset.s; controls(); build();
+  }));
+  document.querySelectorAll("[data-p]").forEach(b => b.addEventListener("click", () => setPreset(b.dataset.p)));
+  document.querySelectorAll("[data-a]").forEach(b => b.addEventListener("click", () => { state.auto = !state.auto; state.lastAct = Date.now(); controls(); }));
+  document.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () => toggleView()));
+}
+
+// ---------------------------------------------------------------- inference telemetry
+function spark(id, values, color) {
+  const c = $(id), g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  const vals = values.slice(-60), n = 60, w = c.width / n;
+  const sv = vals.map(v => v || 0).sort((a, b) => b - a);const mx = Math.max(1, sv[Math.max(0, Math.floor(sv.length * 0.05))] || 1);
+  g.fillStyle = color;
+  vals.forEach((v, i) => {
+    const h = Math.max(1, (v || 0) / mx * (c.height - 2));
+    g.fillRect(i * w, c.height - h, Math.max(1, w - 1), h);
+  });
+}
+async function pollTelemetry() {
+  try {
+    const r = await fetch("../live/telemetry.json?ts=" + Date.now(), { cache: "no-store" });
+    const d = JSON.parse(await r.text());
+    const ss = d.samples || [], last = ss[ss.length - 1] || null;
+    $("tph").textContent = last ? last.phase : "no data";
+    $("tph").className = "ph " + (last ? last.phase.replace("+", "x") : "");
+    teleState.data = last || null;
+    composeKv();
+    spark("tspre", ss.map(x => x.prefill_tps), "#6fd3ff");
+    spark("tsdec", ss.map(x => x.decode_tps), "#f9a13c");
+    spark("tsconc", ss.map(x => (x.run || 0) + (x.wait || 0)), "#8fd4f2");
+    spark("tsmtp", ss.map(x => (x.mtp_accept || 0) * 100), "#ffb454");
+    const gs = (last && last.gpus) || [];
+    $("gprows").innerHTML = gs.map((x, k) => {
+      const u = x.util == null ? 0 : x.util;
+      const ghz = x.clk == null ? "?" : (x.clk / 1000).toFixed(1);
+      const pww = x.pw == null ? "?" : Math.round(x.pw);
+      const tc = x.t == null ? "?" : Math.round(x.t);
+      return `<div class="trow"><span class="tl">GPU${k} ${esc(x.name || "")}</span>`
+        + `<canvas id="gsp${k}" width="120" height="22"></canvas>`
+        + `<span class="tv" style="width:150px">${Math.round(u)}% &#183; ${ghz}GHz &#183; ${pww}W &#183; ${tc}C</span></div>`;
+    }).join("");
+    gs.forEach((x, k) => {
+      const u = x.util || 0;
+      spark("gsp" + k, ss.map(s2 => (s2.gpus && s2.gpus[k]) ? (s2.gpus[k].util || 0) : 0),
+             u > 85 ? "#f2585f" : u > 60 ? "#f9d13c" : "#7be0a2");
+    });
+    const bw = v => v == null ? "-" : v >= 1048576 ? (v / 1048576).toFixed(2) + " MB/s" : (v / 1024).toFixed(1) + " KB/s";
+    const nt = (last && last.net) || {};
+    const wn = (last && last.win) || {};
+    const cl = (last && last.clients) || [];
+    $("netrow").innerHTML =
+      `<div class="hint">net &#183; in ${bw(nt.in)} out ${bw(nt.out)} &#183; ${nt.req ?? "-"} req/s</div>`
+      + (wn.reqs == null ? "" : `<div class="hint">last ${wn.min} min &#183; ${wn.reqs} reqs (${wn.per_min}/min) &#183; avg ${wn.avg_in ?? "-"} in / ${wn.avg_out ?? "-"} out tok</div>`)
+      + (cl.length ? `<div class="hint">callers &#183; ${cl.slice(0, 4).map(c => esc(c.proc) + "\u00d7" + c.n + "@" + esc(c.addr)).join(" \u00b7 ")}</div>` : "");
+    $("tvconc").textContent = last ? `${(last.run || 0) + (last.wait || 0)} \u00b7 peak ${wn.peak ?? "-"} \u00b7 sock ${last.socks ?? "-"}` : "-";
+    $("tvmtp").textContent = last ? `${Math.round((last.mtp_accept || 0) * 100)}% acc \u00b7 trail ${Math.round((last.mtp_accept || 0) * 9)} \u00b7 ${last.decode_tps || 0} t/s` : "-";
+    $("tvpre").textContent = (last ? last.prefill_tps : 0) + " t/s";
+    $("tvdec").textContent = (last ? last.decode_tps : 0) + " t/s";
+    $("tstats").textContent = last
+      ? "ttft " + (last.ttft_ms == null ? "-" : last.ttft_ms) + "ms · itl "
+        + (last.itl_ms == null ? "-" : last.itl_ms) + "ms · mtp "
+        + (last.mtp_accept == null ? "-" : Math.round(last.mtp_accept * 100) + "%") + " · kv "
+        + (last.kv == null ? "-" : Math.round(last.kv * 100) + "%") + " · run " + last.run
+        + (last.wait ? " +q" + last.wait : "")
+      : "awaiting samples";
+    const st = d.meta.status || "ok";
+    const age = d.meta.age == null ? "?" : d.meta.age;
+    $("tago").textContent = (st === "ok" ? "live" : st.toUpperCase()) + " · last sample " + age + "s · "
+      + ss.length + " samples · " + (esc(d.meta.model || "?"));
+    $("tago").style.color = st === "ok" ? "" : "#e0b37b";
+  } catch (e) {
+    $("tago").textContent = "telemetry needs http (not file://)";
+  }
+}
+
+// ---------------------------------------------------------------- live reload
+const liveState = { digest: ATLAS.meta.digest, len: -1, built: -1, failed: false };
+async function pollLive() {
+  const el = $("live");
+  try {
+    const r = await fetch("atlas_data.js?ts=" + Date.now(), { cache: "no-store" });
+    const txt = await r.text();
+    const md = txt.match(/"digest"\s*:\s*"([0-9a-f]+)"/);
+    const mb = txt.match(/"built_at"\s*:\s*(\d+)/);
+    const d = md ? md[1] : null;
+    const built = mb ? parseInt(mb[1], 10) : 0;
+    if (!d) throw new Error("no digest");
+    if (d !== liveState.digest || built !== liveState.built) {
+      const at = txt.indexOf("const ATLAS = ");
+      const j = at >= 0 ? txt.slice(at + 14).replace(/;\s*$/, "") : txt;
+      const next = JSON.parse(j);
+      Object.assign(ATLAS, next);
+      liveState.digest = d; liveState.built = built;
+      sidebar(); controls(); build();
+    }
+    const ago = Math.max(0, Math.round(Date.now() / 1000) - built);
+    el.innerHTML = `<span class="dot"></span><span class="ok">live</span> &#183; built ${built ? new Date(built * 1000).toLocaleTimeString() : "?"} (${ago}s ago) &#183; digest ${esc(d)}<br>` +
+      `<span class="d">regen loop re-derives every ~14s; hot-swap on change</span>`;
+    liveState.failed = false;
+  } catch (e) {
+    if (!liveState.failed) {
+      const b0 = ATLAS.meta.built_at;
+      el.innerHTML = `<span class="dot stale"></span><span class="stale">static</span> &#183; ${b0 ? new Date(b0 * 1000).toLocaleTimeString() : "?"}<br>` +
+        `<span class="d">fetch blocked (${location.protocol}) &#8212; reopen via http, e.g.` +
+        `<b>python3 -m http.server 8000</b> from the project root.</span>`;
+      liveState.failed = true;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- boot
+if (location.hash === "#map") { state.view = "map"; }
+sidebar(); controls(); build(); composeKv();
+if (state.view === "map") setPreset("map");
+requestAnimationFrame(frame);
+setInterval(pollLive, 2000);
+pollLive();
+setInterval(pollTelemetry, 1000);
+pollTelemetry();
+window.addEventListener("visibilitychange", () => { if (!document.hidden) pollTelemetry(); });
+window.addEventListener("focus", () => pollTelemetry());
+</script>
+</body>
+</html>
